@@ -1,0 +1,15 @@
+{
+    "BtManager": {
+        "name": "BT种子管理",
+        "description": "管理下载器中的BT种子。",
+        "labels": "BT",
+        "version": "0.0.2",
+        "icon": "https://raw.githubusercontent.com/doubly-yi/MoviePilot-Plugins/main/icons/BT_Manager.png",
+        "author": "doubly-yi",
+        "level": 2,
+        "history": {
+            "v0.0.2": "支持给qb中的BT种子设置分享率限制以及上传速度限制；支持设置cron",
+            "v0.0.1": "支持给qb中的BT种子添加标签。"
+        }
+    }
+}
