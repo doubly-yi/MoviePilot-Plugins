@@ -24,7 +24,7 @@ class BpPulseSignin(_PluginBase):
     plugin_name = "bp PULSE 签到"
     plugin_desc = "多账号独立签到、短信登录与登录过期提醒。"
     plugin_icon = "https://raw.githubusercontent.com/doubly-yi/MoviePilot-Plugins/main/icons/BpPulseSignin.svg"
-    plugin_version = "1.0.0"
+    plugin_version = "1.0.1"
     plugin_author = "doubly-yi"
     author_url = "https://github.com/doubly-yi"
     plugin_config_prefix = "bppulsesignin_"
