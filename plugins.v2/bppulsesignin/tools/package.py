@@ -5,8 +5,8 @@ import re
 import zipfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-PLUGIN = ROOT / 'plugins.v2/bppulsesignin'
+PLUGIN = Path(__file__).resolve().parents[1]
+ROOT = PLUGIN.parent.parent
 metadata = json.loads((ROOT / 'package.v2.json').read_text(encoding='utf-8'))['BpPulseSignin']
 version = metadata['version']
 assert re.fullmatch(r'\d+\.\d+\.\d+', version), '版本号格式错误'

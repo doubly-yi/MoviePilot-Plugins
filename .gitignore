@@ -7,3 +7,8 @@ node_modules/
 dist/
 .idea/
 AGENTS.md
+/tests/
+/test/
+/docs/
+/doc/
+/.github/
