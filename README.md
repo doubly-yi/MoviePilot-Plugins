@@ -1,4 +1,12 @@
 # MoviePilot-Plugins
+
+## 本仓库插件
+
+| 插件 | 说明 |
+| --- | --- |
+| BT种子管理 | 管理 qBittorrent 种子的标签、上传限速与分享率阈值 |
+| [bp PULSE 签到](plugins.v2/bppulsesignin/README.md) | 多账号短信登录、独立签到、Cron 调度与过期提醒；独立看板和设置页 |
+
 MoviePilot官方插件市场：https://github.com/jxxghp/MoviePilot-Plugins
 
 ## 第三方插件库开发说明

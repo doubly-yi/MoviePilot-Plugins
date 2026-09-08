@@ -11,5 +11,20 @@
             "v0.0.2": "支持给qb中的BT种子设置分享率限制以及上传速度限制；支持设置cron",
             "v0.0.1": "支持给qb中的BT种子添加标签。"
         }
+    },
+    "BpPulseSignin": {
+        "name": "bp PULSE 签到",
+        "description": "多账号独立签到、短信登录与登录过期提醒。",
+        "labels": "签到,生活",
+        "version": "1.0.0",
+        "icon": "https://raw.githubusercontent.com/doubly-yi/MoviePilot-Plugins/main/icons/BpPulseSignin.svg",
+        "author": "doubly-yi",
+        "level": 1,
+        "system_version": ">=2.15.6,<3",
+        "v3": false,
+        "release": true,
+        "history": {
+            "v1.0.0": "支持多账号管理、短信验证码登录、独立签到、Cron 调度及登录过期通知。"
+        }
     }
 }
