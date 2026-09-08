@@ -18,13 +18,14 @@ from app.plugins import _PluginBase
 from app.schemas.types import NotificationType
 
 from .client import AuthExpired, BPClient, BPError
+from .coupons import normalize_coupon, public_coupon, station_summary
 
 
 class BpPulseSignin(_PluginBase):
     plugin_name = "bp PULSE 签到"
-    plugin_desc = "多账号独立签到、短信登录与登录过期提醒。"
+    plugin_desc = "多账号签到、短信登录、常用站点优惠券汇总与空闲枪数查询。"
     plugin_icon = "https://raw.githubusercontent.com/doubly-yi/MoviePilot-Plugins/main/icons/BpPulseSignin.ico"
-    plugin_version = "1.0.0"
+    plugin_version = "1.0.1"
     plugin_author = "doubly-yi"
     author_url = "https://github.com/doubly-yi"
     plugin_config_prefix = "bppulsesignin_"
@@ -49,6 +50,11 @@ class BpPulseSignin(_PluginBase):
             self._enabled = bool(config.get("enabled", False))
             self._notify = bool(config.get("notify", True))
             self._cron = str(config.get("cron") or "0 8 * * *").strip()
+            try:
+                self._station = self._station_config(config.get("station"))
+            except BPError:
+                self._station = None
+                logger.warning("bp PULSE：常用站点配置无效，请重新选择")
             self._cron_error = ""
             try:
                 self._trigger(self._cron)
@@ -68,7 +74,19 @@ class BpPulseSignin(_PluginBase):
             raise BPError("执行周期必须是有效的五段 Cron 表达式") from None
 
     def _settings(self):
-        return {"enabled": self._enabled, "notify": self._notify, "cron": self._cron}
+        return {"enabled": self._enabled, "notify": self._notify, "cron": self._cron,
+                "station": copy.deepcopy(self._station)}
+
+    @staticmethod
+    def _station_config(value):
+        if value is None:
+            return None
+        if not isinstance(value, dict) or not re.fullmatch(r"[0-9]{1,64}", str(value.get("id") or "")):
+            raise BPError("请从搜索结果选择常用站点")
+        name = str(value.get("name") or "").strip()
+        if not name or len(name) > 200:
+            raise BPError("常用站点名称无效，请重新选择")
+        return {"id": str(value["id"]), "name": name, "address": str(value.get("address") or "")[:500]}
 
     def get_state(self) -> bool:
         return self._enabled and not self._stopped
@@ -108,6 +126,9 @@ class BpPulseSignin(_PluginBase):
                   ("/delete", self.delete_api, "POST"),
                   ("/send-code", self.send_code_api, "POST"),
                   ("/login", self.login_api, "POST"),
+                  ("/stations/search", self.search_stations_api, "POST"),
+                  ("/station/refresh", self.station_refresh_api, "POST"),
+                  ("/coupons/refresh", self.coupons_refresh_api, "POST"),
                   ("/check-in", self.check_in_api, "POST")]
         return [{"path": path, "endpoint": endpoint, "methods": [method], "auth": "bear",
                  "dependencies": [Depends(get_current_active_superuser)], "summary": endpoint.__doc__,
@@ -151,6 +172,11 @@ class BpPulseSignin(_PluginBase):
         result["has_token"] = bool(account.get("cookie"))
         result["sms_wait"] = max(0, int(account.get("sms_sent_at", 0) + self.SMS_INTERVAL - time.time() + 1))
         result["code_pending"] = account.get("code_until", 0) > time.time()
+        station_id = self._station["id"] if self._station else ""
+        result["coupons"] = sorted([public_coupon(c, station_id, time.time()) for c in account.get("coupons", [])],
+                                   key=lambda c: c.get("end") or float("inf"))
+        result["coupon_updated"] = account.get("coupon_updated")
+        result["coupon_error"] = account.get("coupon_error", "")
         return result
 
     def _reply(self, operation):
@@ -168,7 +194,113 @@ class BpPulseSignin(_PluginBase):
     def _status(self):
         with self._lock:
             return {"settings": self._settings(), "cron_error": self._cron_error,
-                    "accounts": [self._public(a) for a in self._accounts().values()]}
+                    "accounts": [self._public(a) for a in self._accounts().values()],
+                    "station": self._station_snapshot()}
+
+    def _station_snapshot(self):
+        cached = self.get_data("station_snapshot") or {}
+        return cached if self._station and cached.get("id") == self._station["id"] else None
+
+    def _check_query_state(self):
+        if self._stopped:
+            raise BPError("插件已停止或重载，请在设置页重新保存配置后重试")
+
+    def _station_query(self, operation):
+        self._check_query_state()
+        for aid in self._accounts():
+            with self._account(aid) as account:
+                if not account.get("cookie") or account.get("auth_status") == "expired":
+                    continue
+                try:
+                    return operation(account["cookie"])
+                except AuthExpired:
+                    account["auth_status"] = "expired"
+                    self._notify_expired(account)
+                    self._store(account)
+                except BPError:
+                    raise
+                except Exception as exc:
+                    logger.warning(f"bp PULSE 站点查询失败：{type(exc).__name__}")
+                    raise BPError("站点查询失败，请稍后重试") from None
+        raise BPError("请先在看板登录至少一个账号，再查询站点")
+
+    def search_stations_api(self, payload: dict = Body(...)):
+        """按名称分页搜索充电站。"""
+        try:
+            keyword = str(payload.get("keyword") or "").strip()
+            if not 2 <= len(keyword) <= 50:
+                raise BPError("请输入 2～50 个字符的站点关键词")
+            page = payload.get("page", 1)
+            if type(page) is not int or not 1 <= page <= 100:
+                raise BPError("搜索页码无效")
+            data = self._station_query(lambda token: self._client.search_stations(keyword, token, page))
+            if not isinstance(data.get("list"), list):
+                raise BPError("站点列表格式异常")
+            items = [station_summary(s) for s in data["list"] if isinstance(s, dict) and s.get("stationId")]
+            return {"success": True, "data": {"items": items, "total": int(data.get("totalSize") or 0)}}
+        except BPError as exc:
+            return {"success": False, "message": str(exc)}
+        except Exception as exc:
+            logger.warning(f"bp PULSE 站点搜索失败：{type(exc).__name__}")
+            return {"success": False, "message": "站点搜索失败，请稍后重试"}
+
+    def station_refresh_api(self, payload: dict = Body(...)):
+        """更新常用站点的空闲枪数，短期查询复用缓存。"""
+        def refresh():
+            self._check_query_state()
+            with self._lock:
+                station = copy.deepcopy(self._station)
+                generation = self._stop_event
+            if not station:
+                raise BPError("请先设置常用站点")
+            cached = self._station_snapshot()
+            if cached and time.time() - cached.get("updated", 0) < 60 and not cached.get("error"):
+                return "站点数据已是最近一分钟的结果"
+            try:
+                data = self._station_query(lambda token: self._client.station_details(station["id"], token))
+                snapshot = station_summary(data)
+                if snapshot["id"] != station["id"]:
+                    raise BPError("站点详情返回不匹配，请稍后重试")
+                snapshot.update(updated=time.time(), error="")
+            except BPError as exc:
+                snapshot = dict(cached or station, error=str(exc))
+            with self._lock:
+                if generation.is_set() or self._station != station:
+                    raise BPError("常用站点已变更，请刷新页面")
+                self.save_data("station_snapshot", snapshot)
+            return "站点信息已更新"
+        return self._reply(refresh)
+
+    def coupons_refresh_api(self, payload: dict = Body(...)):
+        """查询指定账号的全部未使用优惠券，不签到、不领取奖励。"""
+        def refresh():
+            self._check_query_state()
+            generation = self._stop_event
+            with self._account(payload.get("id")) as account:
+                if account.get("coupon_updated") and time.time() - account["coupon_updated"] < 60 and not account.get("coupon_error"):
+                    return "优惠券已是最近一分钟的结果"
+                try:
+                    if not account.get("cookie") or account.get("auth_status") == "expired":
+                        raise AuthExpired("请手动登录后再查询优惠券")
+                    data = self._client.coupons(account["cookie"])
+                    coupons = [normalize_coupon(c) for c in data]
+                    account.update(coupons=coupons, coupon_updated=time.time(), coupon_error="",
+                                   auth_status="valid", expired_notified=False)
+                except AuthExpired:
+                    account.update(auth_status="expired" if account.get("cookie") else "missing",
+                                   coupon_error="登录已失效，请手动登录后刷新优惠券")
+                    self._notify_expired(account)
+                except BPError as exc:
+                    account["coupon_error"] = str(exc)
+                except Exception as exc:
+                    logger.warning(f"bp PULSE 优惠券查询失败：{type(exc).__name__}")
+                    account["coupon_error"] = "优惠券查询失败，请稍后重试"
+                if generation.is_set():
+                    raise BPError("插件已重载，请重新刷新优惠券")
+                self._store(account)
+                logger.info(f"bp PULSE [{account['id'][:8]}]：优惠券查询{'失败' if account.get('coupon_error') else '完成'}")
+            return "优惠券查询完成"
+        return self._reply(refresh)
 
     def status_api(self):
         """获取账号登录状态和最近签到结果。"""
@@ -179,6 +311,7 @@ class BpPulseSignin(_PluginBase):
         def validate():
             cron = str(payload.get("cron") or "").strip()
             self._trigger(cron)
+            self._station_config(payload.get("station"))
             return "配置校验通过"
         return self._reply(validate)
 
@@ -226,6 +359,7 @@ class BpPulseSignin(_PluginBase):
                     if token:
                         account["cookie"] = token
                     if changed_phone or payload.get("clear_token") or token:
+                        account.update(coupons=[], coupon_updated=None, coupon_error="")
                         account.update(auth_status="unknown" if account["cookie"] else "missing",
                                        expired_notified=False, code_until=0, sms_sent_at=0,
                                        status="idle", message="登录信息已更新", last_run=None)
@@ -277,7 +411,8 @@ class BpPulseSignin(_PluginBase):
                 self._store(account)
                 token = self._client.login(account["phone"], code)
                 account.update(cookie=token, auth_status="valid", expired_notified=False,
-                               code_until=0, status="idle", message="登录成功，等待签到")
+                               code_until=0, status="idle", message="登录成功，等待签到",
+                               coupons=[], coupon_updated=None, coupon_error="")
                 self._store(account)
             return "登录成功，已保存登录凭据"
         return self._reply(login)
@@ -307,6 +442,7 @@ class BpPulseSignin(_PluginBase):
                     raise AuthExpired("请手动登录后再签到")
                 result = self._client.check_in(account["cookie"])
                 account.update(result, auth_status="valid", expired_notified=False)
+                account["coupon_error"] = "签到结果已更新，请刷新优惠券"
             except AuthExpired:
                 account.update(auth_status="expired" if account.get("cookie") else "missing",
                                status="expired", message="登录已失效，请手动登录")

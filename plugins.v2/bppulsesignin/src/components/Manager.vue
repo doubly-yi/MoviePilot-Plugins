@@ -1,8 +1,12 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import StationPicker from './StationPicker.vue'
+import ChargingBoard from './ChargingBoard.vue'
 const props = defineProps({ api: { type: [Object, Function], required: true }, pluginId: { type: String, default: 'BpPulseSignin' }, mode: { type: String, default: 'dashboard' }, showSwitch: { type: Boolean, default: true } })
 const emit = defineEmits(['close', 'switch', 'save'])
 const accounts = ref([])
+const station = ref(null)
+const charging = ref(null)
 const settings = ref({ enabled: false, cron: '0 8 * * *', notify: true })
 const loaded = ref(false)
 const loading = ref(false)
@@ -25,6 +29,10 @@ const isSettings = computed(() => props.mode === 'settings')
 const loggedIn = computed(() => accounts.value.filter(a => a.auth_status === 'valid').length)
 const expired = computed(() => accounts.value.filter(a => ['expired', 'missing'].includes(a.auth_status)).length)
 const enabledCount = computed(() => accounts.value.filter(a => a.enabled).length)
+const couponCount = computed(() => {
+  if (!settings.value.station || !accounts.value.some(a => a.coupon_updated)) return '—'
+  return accounts.value.reduce((total, a) => total + (a.coupons || []).filter(c => c.scope === 'match' && c.validity === 'valid').length, 0)
+})
 const currentLogin = computed(() => accounts.value.find(a => a.id === loginTarget.value?.id))
 const waitSeconds = computed(() => Math.max(0, Math.ceil(((currentLogin.value?.retryAt || 0) - now.value) / 1000)))
 const phoneValid = v => /^1[3-9]\d{9}$/.test(v || '')
@@ -35,6 +43,7 @@ function absorb(data, replaceSettings = false) {
   if (!data) return
   now.value = Date.now()
   accounts.value = (data.accounts || []).map(a => ({ ...a, retryAt: now.value + (a.sms_wait || 0) * 1000 }))
+  station.value = data.station || null
   cronError.value = data.cron_error || ''
   if (!loaded.value || replaceSettings) settings.value = { ...data.settings }
   loaded.value = true
@@ -97,6 +106,7 @@ async function checkIn(a) {
     absorb(response.data)
     const updated = accounts.value.find(item => item.id === a.id)
     notice.value = {type: ['error','expired','warning'].includes(updated?.status) ? 'warning' : 'success', text:`${a.name}：${response.message}`}
+    if (updated?.auth_status === 'valid') await charging.value?.refreshAccount(updated)
   } catch (e) { notice.value = {type:'error', text:errorText(e)} }
   finally { busy.value[a.id] = false }
 }
@@ -126,6 +136,8 @@ async function verify() {
     const response = await request('login', {id, code:code.value})
     absorb(response.data); code.value = ''; loginTarget.value = null
     notice.value = {type:'success', text:response.message}
+    const account = accounts.value.find(a => a.id === id)
+    if (account) await charging.value?.refreshAccount(account)
   } catch (e) { loginError.value = errorText(e) }
   finally { busy.value[id] = false }
 }
@@ -149,6 +161,7 @@ onMounted(refresh)
         <div><span>登录正常</span><strong class="bp-success">{{ loggedIn }}</strong></div>
         <div><span>待登录</span><strong :class="{'bp-attention':expired}">{{ expired }}</strong></div>
         <div><span>定时账号</span><strong>{{ enabledCount }}</strong></div>
+        <div :title="settings.station ? '按最近同步结果统计本站适用且在有效期内的券，使用限制见下方详情' : '请先设置常用站点'"><span>可用优惠券</span><strong class="bp-success">{{ couponCount }}</strong></div>
       </div>
       <div class="bp-section-title mb-3"><h3>签到状态</h3><VChip size="small" color="primary" variant="tonal">{{ settings.enabled ? '定时已开启' : '定时未开启' }}</VChip></div>
       <div v-if="!accounts.length && loaded" class="bp-empty"><h3>还没有账号</h3><p>前往设置添加账号，完成登录后即可签到。</p><VBtn v-if="showSwitch" color="primary" variant="tonal" @click="emit('switch')">前往设置</VBtn></div>
@@ -162,6 +175,7 @@ onMounted(refresh)
           <td><div class="bp-row-actions"><VBtn size="small" variant="tonal" color="primary" :loading="busy[a.id]" :disabled="!a.has_token || a.auth_status === 'expired'" @click="checkIn(a)">签到</VBtn><VBtn size="small" variant="text" color="primary" :disabled="busy[a.id]" @click="startLogin(a)">登录</VBtn></div></td>
         </tr></tbody>
       </VTable>
+      <ChargingBoard v-if="loaded && accounts.length" ref="charging" :accounts="accounts" :selected="settings.station" :station="station" :request="request" @updated="absorb" @notice="notice = $event" @settings="emit('switch')" />
       <div v-if="showSwitch" class="bp-board-footer"><VBtn color="primary" variant="flat" rounded="pill" @click="emit('switch')"><svg class="bp-gear" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="m19.4 13 .1-1-.1-1 2-1.5-2-3.5-2.3 1a8 8 0 0 0-1.7-1L15 3h-4l-.4 3a8 8 0 0 0-1.7 1l-2.3-1-2 3.5 2 1.5-.1 1 .1 1-2 1.5 2 3.5 2.3-1a8 8 0 0 0 1.7 1l.4 3h4l.4-3a8 8 0 0 0 1.7-1l2.3 1 2-3.5zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7"/></svg>设置</VBtn></div>
     </template>
 
@@ -172,6 +186,7 @@ onMounted(refresh)
       </div>
       <VTextField v-model="settings.cron" label="执行周期（Cron）" placeholder="0 8 * * *" hint="五段表达式，按 MP 时区执行；示例：每天 08:00" persistent-hint density="comfortable" variant="outlined" :error-messages="cronError" class="mb-6" />
       <VAlert type="info" variant="tonal" density="compact" class="mb-6">登录失效时会发送通知。重新登录请在看板点击对应账号的“登录”。</VAlert>
+      <StationPicker v-if="loaded" v-model="settings.station" :request="request" />
       <div class="bp-section-title mb-3"><div><h3>账号管理</h3><p class="bp-hint">账号修改即时保存；执行设置通过下方“保存”生效。</p></div><VBtn color="primary" variant="tonal" :disabled="!loaded" @click="openEditor(null)">添加账号</VBtn></div>
       <div v-if="!accounts.length && loaded" class="bp-empty"><h3>添加第一个账号</h3><p>填写手机号后，前往看板使用短信验证码登录。</p></div>
       <div class="bp-accounts">
@@ -212,8 +227,8 @@ onMounted(refresh)
 .bp-manager{padding:20px;max-width:1200px;margin:0 auto;color:rgb(var(--v-theme-on-surface));font-size:14px}
 .bp-header,.bp-section-title,.bp-account-actions{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .bp-header{margin-bottom:28px}.bp-header-actions{display:flex;align-items:center;gap:4px}.bp-close{color:rgba(var(--v-theme-on-surface),.6)}.bp-manager h2{font-size:18px;font-weight:600}.bp-manager h3{font-size:15px;font-weight:600}.bp-hint,.bp-phone{font-size:12px;opacity:.65;margin:4px 0 0}
-.bp-summary{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px}.bp-summary>div{background:rgba(var(--v-theme-on-surface),.025);border-left:2px solid rgba(var(--v-theme-primary),.35);padding:12px 16px;border-radius:10px;display:flex;flex-direction:column;gap:4px}.bp-summary span{opacity:.65;font-size:12px}.bp-summary strong{font-size:24px;font-weight:600}.bp-success,.bp-state-success{color:rgb(var(--v-theme-success))}.bp-attention,.bp-state-expired,.bp-state-warning{color:rgb(var(--v-theme-warning))}.bp-state-error{color:rgb(var(--v-theme-error))}
+.bp-summary{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin-bottom:24px}.bp-summary>div{background:rgba(var(--v-theme-on-surface),.025);border-left:2px solid rgba(var(--v-theme-primary),.35);padding:12px 16px;border-radius:10px;display:flex;flex-direction:column;gap:4px}.bp-summary span{opacity:.65;font-size:12px}.bp-summary strong{font-size:24px;font-weight:600}.bp-success,.bp-state-success{color:rgb(var(--v-theme-success))}.bp-attention,.bp-state-expired,.bp-state-warning{color:rgb(var(--v-theme-warning))}.bp-state-error{color:rgb(var(--v-theme-error))}
 .bp-status-table{border:1px solid rgba(var(--v-theme-on-surface),.12);border-radius:10px}.bp-status-table th{white-space:nowrap}.bp-status-table td{padding-top:12px!important;padding-bottom:12px!important}.bp-status-table td:first-child{min-width:140px}.bp-status-table td:nth-child(4){min-width:170px;font-size:12px}.bp-date{min-width:140px;font-size:12px;opacity:.7}.bp-row-actions{display:flex;justify-content:flex-end;gap:4px}.bp-board-footer{display:flex;justify-content:flex-end;margin-top:24px;position:sticky;bottom:16px}.bp-gear{width:20px;height:20px;margin-right:8px}
 .bp-config-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-bottom:24px}.bp-accounts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.bp-account{border-color:rgba(var(--v-theme-on-surface),.12);border-radius:12px}.bp-account-actions{gap:6px;margin-top:16px}.bp-empty{text-align:center;border:1px dashed rgba(var(--v-theme-on-surface),.2);border-radius:12px;padding:36px 16px}.bp-empty p{opacity:.6;margin:8px 0 20px}.bp-dialog{padding:12px;border-radius:16px}.bp-phone{font-variant-numeric:tabular-nums}.bp-config-footer{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:24px;padding:0;background:transparent}
-@media(max-width:600px){.bp-manager{padding:16px}.bp-manager h2{font-size:16px}.bp-header{gap:4px}.bp-summary{grid-template-columns:repeat(2,1fr)}.bp-summary>div{padding:10px 12px}.bp-config-options{grid-template-columns:1fr;gap:0}.bp-accounts{grid-template-columns:1fr}}
+@media(max-width:600px){.bp-manager{padding:16px}.bp-manager h2{font-size:16px}.bp-header{gap:4px}.bp-summary{grid-template-columns:repeat(2,1fr)}.bp-summary>div{padding:10px 12px}.bp-summary>div:last-child{grid-column:1/-1}.bp-config-options{grid-template-columns:1fr;gap:0}.bp-accounts{grid-template-columns:1fr}}
 </style>

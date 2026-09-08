@@ -30,6 +30,41 @@ def payload(data):
 
 
 class BPClient:
+    def search_stations(self, keyword, token, page=1):
+        return self.request("standard/poi/map/relatedStationPageList",
+                            {"stationName": keyword, "locLongitude": 0, "locLatitude": 0,
+                             "pageNum": page, "pageSize": 10}, token)
+
+    def station_details(self, station_id, token):
+        return self.request("standard/poi/v1/es/station/details",
+                            {"stationId": station_id, "longitude": 0, "latitude": 0}, token)
+
+    def coupons(self, token):
+        coupons, seen = [], set()
+        for page in range(1, 101):
+            data = self.request("standard/activity/api/coupon/list",
+                                {"couponReceiveType": 0, "pageNum": page, "pageSize": 10}, token)
+            items = data.get("list")
+            if not isinstance(items, list) or any(not isinstance(c, dict) for c in items):
+                raise BPError("优惠券列表格式异常，请稍后刷新")
+            try:
+                total = int(data["totalSize"])
+            except (KeyError, TypeError, ValueError):
+                raise BPError("优惠券分页信息异常，请稍后刷新") from None
+            if total < 0 or total > 1000:
+                raise BPError("优惠券数量超出查询范围，未更新缓存")
+            for item in items:
+                key = str(item.get("couponId") or "")
+                if not key or key in seen:
+                    raise BPError("优惠券分页发生变化，请重新刷新")
+                seen.add(key)
+                coupons.append(item)
+            if len(coupons) >= total:
+                return coupons
+            if not items:
+                break
+        raise BPError("优惠券列表未获取完整，请重新刷新")
+
     def request(self, path, data, token=""):
         headers = {"Content-Type": "application/json; charset=UTF-8", "X-CLIENT-ID": "0",
                    "X-EMP-ID": "1", "VERSION": "2.0.4"}
