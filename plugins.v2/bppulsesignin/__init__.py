@@ -23,8 +23,8 @@ from .client import AuthExpired, BPClient, BPError
 class BpPulseSignin(_PluginBase):
     plugin_name = "bp PULSE 签到"
     plugin_desc = "多账号独立签到、短信登录与登录过期提醒。"
-    plugin_icon = "https://raw.githubusercontent.com/doubly-yi/MoviePilot-Plugins/main/icons/BpPulseSignin.svg"
-    plugin_version = "1.0.1"
+    plugin_icon = "https://raw.githubusercontent.com/doubly-yi/MoviePilot-Plugins/main/icons/BpPulseSignin.ico"
+    plugin_version = "1.0.0"
     plugin_author = "doubly-yi"
     author_url = "https://github.com/doubly-yi"
     plugin_config_prefix = "bppulsesignin_"
@@ -38,8 +38,12 @@ class BpPulseSignin(_PluginBase):
         if not hasattr(self, "_lock"):
             self._lock = threading.RLock()
             self._account_locks = {}
+            self._batch_lock = threading.Lock()
             self._client = BPClient()
         with self._lock:
+            if hasattr(self, "_stop_event"):
+                self._stop_event.set()
+            self._stop_event = threading.Event()
             self._stopped = False
             config = config or {}
             self._enabled = bool(config.get("enabled", False))
@@ -51,6 +55,8 @@ class BpPulseSignin(_PluginBase):
             except BPError as exc:
                 self._cron_error = str(exc)
                 logger.warning(f"bp PULSE: {exc}")
+            logger.info(f"bp PULSE 初始化完成：定时签到{'开启' if self._enabled else '关闭'}，"
+                        f"已配置 {len(self._accounts())} 个账号")
 
     @staticmethod
     def _trigger(cron):
@@ -84,6 +90,9 @@ class BpPulseSignin(_PluginBase):
     def stop_service(self):
         # 任务由宿主管理；已发出的 HTTP 请求受 20 秒超时限制。
         self._stopped = True
+        if hasattr(self, "_stop_event"):
+            self._stop_event.set()
+        logger.info("bp PULSE：已停止后台任务，等待卸载或重新初始化")
 
     def get_service(self):
         if not self.get_state() or self._cron_error:
@@ -149,6 +158,7 @@ class BpPulseSignin(_PluginBase):
             message = operation()
             return {"success": True, "message": message or "操作成功", "data": self._status()}
         except BPError as exc:
+            logger.warning(f"bp PULSE 操作未完成：{exc}")
             return {"success": False, "message": str(exc)}
         except Exception as exc:
             # 只记录异常类型，第三方异常正文可能包含凭据。
@@ -287,9 +297,10 @@ class BpPulseSignin(_PluginBase):
     def _check_in(self, account_id, manual=False):
         with self._account(account_id) as account:
             if self._stopped:
-                raise BPError("插件正在停止")
+                raise BPError("插件已停止或重载，请在设置页重新保存配置后重试")
             if not manual and (not self.get_state() or not account.get("enabled")):
                 return "账号未启用，已跳过"
+            logger.info(f"bp PULSE [{account_id[:8]}]：开始{'手动' if manual else '定时'}签到")
             account["last_run"] = datetime.now(CronTrigger(timezone=settings.TZ).timezone).isoformat(timespec="seconds")
             try:
                 if not account.get("cookie") or account.get("auth_status") == "expired":
@@ -317,16 +328,24 @@ class BpPulseSignin(_PluginBase):
         return self._reply(lambda: self._check_in(payload.get("id"), manual=True))
 
     def run_service(self):
-        if not self.get_state():
+        stop_event = self._stop_event
+        if stop_event.is_set() or not self.get_state():
             return
-        with self._lock:
-            ids = [a["id"] for a in self._accounts().values() if a.get("enabled")]
-        for account_id in ids:
-            if not self.get_state():
-                break
-            try:
-                self._check_in(account_id)
-            except BPError as exc:
-                logger.warning(f"bp PULSE [{account_id[:8]}]：{exc}")
-            except Exception as exc:
-                logger.error(f"bp PULSE [{account_id[:8]}] 签到失败：{type(exc).__name__}")
+        if not self._batch_lock.acquire(blocking=False):
+            logger.info("bp PULSE：已有批量签到正在执行，跳过本次重复运行")
+            return
+        try:
+            with self._lock:
+                ids = [a["id"] for a in self._accounts().values() if a.get("enabled")]
+            logger.info(f"bp PULSE：定时签到，共 {len(ids)} 个账号")
+            for account_id in ids:
+                if stop_event.is_set() or not self.get_state():
+                    break
+                try:
+                    self._check_in(account_id)
+                except BPError as exc:
+                    logger.warning(f"bp PULSE [{account_id[:8]}]：{exc}")
+                except Exception as exc:
+                    logger.error(f"bp PULSE [{account_id[:8]}] 签到失败：{type(exc).__name__}")
+        finally:
+            self._batch_lock.release()

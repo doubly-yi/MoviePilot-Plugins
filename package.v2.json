@@ -16,15 +16,14 @@
         "name": "bp PULSE 签到",
         "description": "多账号独立签到、短信登录与登录过期提醒。",
         "labels": "签到,生活",
-        "version": "1.0.1",
-        "icon": "https://raw.githubusercontent.com/doubly-yi/MoviePilot-Plugins/main/icons/BpPulseSignin.svg",
+        "version": "1.0.0",
+        "icon": "https://raw.githubusercontent.com/doubly-yi/MoviePilot-Plugins/main/icons/BpPulseSignin.ico",
         "author": "doubly-yi",
         "level": 1,
         "system_version": ">=2.15.6,<3",
         "v3": false,
         "history": {
-            "v1.0.1": "提交前端构建产物，支持直接从仓库安装，无需依赖 Release。",
-            "v1.0.0": "支持多账号管理、短信验证码登录、独立签到、Cron 调度及登录过期通知。"
+            "v1.0.0": "支持多账号短信登录、单账号签到、Cron 定时签到、礼包领取及登录过期提醒；提供独立看板、配置页和运行日志，包含前端构建文件，可直接从仓库安装。"
         }
     }
 }

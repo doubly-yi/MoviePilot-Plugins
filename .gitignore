@@ -4,7 +4,6 @@ __pycache__/
 node_modules/
 .test-artifacts/
 .release/
-dist/
 .idea/
 AGENTS.md
 /tests/
@@ -12,9 +11,5 @@ AGENTS.md
 /docs/
 /doc/
 /.github/
-
-# bp PULSE 界面运行所需的构建产物
-!plugins.v2/bppulsesignin/dist/
-!plugins.v2/bppulsesignin/dist/**
 
 .DS_Store
