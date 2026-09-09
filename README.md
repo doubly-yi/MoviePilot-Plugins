@@ -1,6 +1,6 @@
 # MoviePilot-Plugins
 
-Doubly 的 MoviePilot 第三方插件仓库，提供下载器种子管理和 bp PULSE 多账号签到插件。当前插件面向 **MoviePilot V2**。
+Doubly 的 MoviePilot 第三方插件仓库，提供下载器种子管理、bp PULSE 多账号签到和 Dicar 插件。当前插件面向 **MoviePilot V2**。
 
 ## 插件一览
 
@@ -8,6 +8,7 @@ Doubly 的 MoviePilot 第三方插件仓库，提供下载器种子管理和 bp 
 | --- | --- | --- | --- |
 | [BT种子管理](#bt种子管理) | 0.0.2 | 添加种子标签、设置上传限速、分享率达到阈值时暂停做种 | MoviePilot V2、qBittorrent |
 | [bp PULSE 签到](#bp-pulse-签到) | 1.0.1 | 多账号签到、短信登录、礼包领取、常用站点空闲枪数与优惠券汇总 | MoviePilot v2.15.6 及以上的 V2 版本 |
+| [Dicar](#dicar) | 1.0.0 | 签到插件，支持定时签到、积分余额查询和签到日历。 | MoviePilot v2.15.6 及以上的 V2 版本 |
 
 ## 安装
 
@@ -65,6 +66,10 @@ Doubly 的 MoviePilot 第三方插件仓库，提供下载器种子管理和 bp 
 账号和登录信息即时保存；常用站点、执行周期、定时签到开关及通知选项需要在设置页点击“保存”。默认执行周期为 `0 8 * * *`，即按 MoviePilot 时区每天 08:00 执行。查询优惠券不触发签到或领奖，也不需要开启定时签到。
 
 更多账号设置、通知规则和常见问题见 [bp PULSE 使用说明](plugins.v2/bppulsesignin/README.md)。
+
+## Dicar
+
+签到插件，支持定时签到、积分余额查询和签到日历。[使用说明](plugins.v2/dicar/README.md)。
 
 ## 问题反馈
 
