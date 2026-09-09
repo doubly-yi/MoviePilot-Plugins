@@ -129,6 +129,8 @@ class BpPulseSignin(_PluginBase):
                   ("/stations/search", self.search_stations_api, "POST"),
                   ("/station/refresh", self.station_refresh_api, "POST"),
                   ("/coupons/refresh", self.coupons_refresh_api, "POST"),
+                  ("/claim-prizes", self.claim_prizes_api, "POST"),
+                  ("/rewards/refresh", self.rewards_refresh_api, "POST"),
                   ("/check-in", self.check_in_api, "POST")]
         return [{"path": path, "endpoint": endpoint, "methods": [method], "auth": "bear",
                  "dependencies": [Depends(get_current_active_superuser)], "summary": endpoint.__doc__,
@@ -170,6 +172,8 @@ class BpPulseSignin(_PluginBase):
         result = {key: account.get(key) for key in
                   ("id", "name", "phone", "enabled", "revision", "auth_status", "last_run", "status", "message")}
         result["has_token"] = bool(account.get("cookie"))
+        result["auto_claim"] = account.get("auto_claim", True)
+        result.update({key: account.get(key) for key in ("last_claim", "claim_status", "claim_message")})
         result["sms_wait"] = max(0, int(account.get("sms_sent_at", 0) + self.SMS_INTERVAL - time.time() + 1))
         result["code_pending"] = account.get("code_until", 0) > time.time()
         station_id = self._station["id"] if self._station else ""
@@ -177,6 +181,9 @@ class BpPulseSignin(_PluginBase):
                                    key=lambda c: c.get("end") or float("inf"))
         result["coupon_updated"] = account.get("coupon_updated")
         result["coupon_error"] = account.get("coupon_error", "")
+        result["rewards"] = account.get("rewards", [])
+        result["reward_updated"] = account.get("reward_updated")
+        result["reward_error"] = account.get("reward_error", "")
         return result
 
     def _reply(self, operation):
@@ -306,6 +313,35 @@ class BpPulseSignin(_PluginBase):
         """获取账号登录状态和最近签到结果。"""
         return {"success": True, "data": self._status()}
 
+    def rewards_refresh_api(self, payload: dict = Body(...)):
+        """只读查询奖励任务，状态直接采用 bp 返回值，不按进度推算。"""
+        def refresh():
+            self._check_query_state()
+            generation = self._stop_event
+            with self._account(payload.get("id")) as account:
+                if account.get("reward_updated") and time.time() - account["reward_updated"] < 60 and not account.get("reward_error"):
+                    return "奖励任务已是最近一分钟的结果"
+                try:
+                    if not account.get("cookie") or account.get("auth_status") == "expired":
+                        raise AuthExpired("请手动登录后再查询奖励")
+                    rewards = self._client.rewards(account["cookie"])
+                    account.update(rewards=rewards, reward_updated=time.time(), reward_error="",
+                                   auth_status="valid", expired_notified=False)
+                except AuthExpired:
+                    account.update(auth_status="expired" if account.get("cookie") else "missing",
+                                   reward_error="登录已失效，请手动登录后刷新奖励")
+                    self._notify_expired(account)
+                except BPError as exc:
+                    account["reward_error"] = str(exc)
+                except Exception as exc:
+                    logger.warning(f"bp PULSE 奖励查询失败：{type(exc).__name__}")
+                    account["reward_error"] = "奖励查询失败，请稍后重试"
+                if generation.is_set():
+                    raise BPError("插件已重载，请重新刷新奖励")
+                self._store(account)
+            return "奖励任务查询完成"
+        return self._reply(refresh)
+
     def validate_settings_api(self, payload: dict = Body(...)):
         """校验设置；保存与重新注册定时服务由宿主标准配置流程完成。"""
         def validate():
@@ -334,6 +370,8 @@ class BpPulseSignin(_PluginBase):
         """新增或编辑账号，留空 Token 时保留已有凭据。"""
         def save():
             name, phone, token = self._credentials(payload)
+            if "auto_claim" in payload and type(payload["auto_claim"]) is not bool:
+                raise BPError("自动领奖开关必须为开启或关闭")
             account_id = payload.get("id")
             if not account_id:
                 with self._lock:
@@ -345,6 +383,7 @@ class BpPulseSignin(_PluginBase):
                     account_id = uuid.uuid4().hex
                     accounts[account_id] = {"id": account_id, "name": name, "phone": phone,
                         "enabled": bool(payload.get("enabled", True)), "cookie": token, "revision": 1,
+                        "auto_claim": payload.get("auto_claim", True),
                         "auth_status": "unknown" if token else "missing", "status": "idle", "message": "尚未签到"}
                     self.save_data(self.DATA_KEY, accounts)
             else:
@@ -360,10 +399,14 @@ class BpPulseSignin(_PluginBase):
                         account["cookie"] = token
                     if changed_phone or payload.get("clear_token") or token:
                         account.update(coupons=[], coupon_updated=None, coupon_error="")
+                        account.update(rewards=[], reward_updated=None, reward_error="")
+                        account.update(last_claim=None, claim_status=None, claim_message=None)
                         account.update(auth_status="unknown" if account["cookie"] else "missing",
                                        expired_notified=False, code_until=0, sms_sent_at=0,
                                        status="idle", message="登录信息已更新", last_run=None)
                     account.update(name=name, phone=phone, enabled=bool(payload.get("enabled", True)))
+                    # 旧版前端未传此字段时保留选择；历史账号默认仍自动领奖。
+                    account["auto_claim"] = payload.get("auto_claim", account.get("auto_claim", True))
                     self._store(account)
             return "账号已保存"
         return self._reply(save)
@@ -412,7 +455,8 @@ class BpPulseSignin(_PluginBase):
                 token = self._client.login(account["phone"], code)
                 account.update(cookie=token, auth_status="valid", expired_notified=False,
                                code_until=0, status="idle", message="登录成功，等待签到",
-                               coupons=[], coupon_updated=None, coupon_error="")
+                               coupons=[], coupon_updated=None, coupon_error="",
+                               rewards=[], reward_updated=None, reward_error="")
                 self._store(account)
             return "登录成功，已保存登录凭据"
         return self._reply(login)
@@ -429,28 +473,75 @@ class BpPulseSignin(_PluginBase):
             return
         account["expired_notified"] = True
 
-    def _check_in(self, account_id, manual=False):
+    def _send_batch_notification(self, results):
+        # 收集器属于本轮任务；不与手动签到或其他查询共用通知状态。
+        visible = [r for r in results if self._notify or r.get("login_reminder")]
+        if not visible:
+            return
+        sections = []
+        for result in visible:
+            detail = result["message"].replace("；本月累计", " · 本月累计").replace("；", "\n")
+            sections.append(f"【{result['name']}】\n{detail}")
+        text = "\n\n".join(sections)
+        if any(r.get("login_reminder") for r in visible):
+            text += "\n\n请打开插件，点击对应账号的“登录”获取验证码。"
+        try:
+            self.post_message(mtype=NotificationType.Plugin,
+                              title="bp PULSE · 定时签到汇总" if self._notify else "bp PULSE 登录提醒",
+                              text=text)
+        except Exception as exc:
+            logger.warning(f"bp PULSE 汇总通知失败：{type(exc).__name__}")
+            return
+        # 发送成功后才记录提醒；账号若已重新登录或编辑，不覆盖新状态。
+        with self._lock:
+            accounts = self._accounts()
+            changed = False
+            for result in visible:
+                account = accounts.get(result.get("id"))
+                if (result.get("login_reminder") and account
+                        and account.get("revision") == result.get("revision")
+                        and account.get("auth_status") in ("expired", "missing")):
+                    account["expired_notified"] = True
+                    changed = True
+            if changed:
+                self.save_data(self.DATA_KEY, accounts)
+
+    def _check_in(self, account_id, manual=False, notifications=None):
         with self._account(account_id) as account:
             if self._stopped:
                 raise BPError("插件已停止或重载，请在设置页重新保存配置后重试")
             if not manual and (not self.get_state() or not account.get("enabled")):
                 return "账号未启用，已跳过"
-            logger.info(f"bp PULSE [{account_id[:8]}]：开始{'手动' if manual else '定时'}签到")
+            logger.info(f"bp PULSE [{account_id[:8]}]：开始{'手动' if manual else '定时'}签到，"
+                        f"自动领奖{'开启' if account.get('auto_claim', True) else '关闭'}")
             account["last_run"] = datetime.now(CronTrigger(timezone=settings.TZ).timezone).isoformat(timespec="seconds")
             try:
                 if not account.get("cookie") or account.get("auth_status") == "expired":
                     raise AuthExpired("请手动登录后再签到")
-                result = self._client.check_in(account["cookie"])
+                result = self._client.check_in(account["cookie"], auto_claim=account.get("auto_claim", True))
                 account.update(result, auth_status="valid", expired_notified=False)
                 account["coupon_error"] = "签到结果已更新，请刷新优惠券"
+                account["reward_error"] = "签到结果已更新，请刷新奖励状态"
             except AuthExpired:
                 account.update(auth_status="expired" if account.get("cookie") else "missing",
                                status="expired", message="登录已失效，请手动登录")
-                self._notify_expired(account)
+                if notifications is None:
+                    self._notify_expired(account)
             except BPError as exc:
                 account.update(status="error", message=str(exc))
+            except Exception as exc:
+                logger.error(f"bp PULSE [{account_id[:8]}] 签到失败：{type(exc).__name__}")
+                account.update(status="error", message="签到结果未确认，请稍后查看签到状态")
             self._store(account)
-            if self._notify and account["status"] != "expired":
+            if notifications is not None:
+                expired = account["status"] == "expired"
+                name = account["name"]
+                if expired:
+                    name += f"（{account['phone'][:3]}****{account['phone'][-4:]}）"
+                notifications.append({"id": account_id, "revision": account["revision"],
+                                      "name": name, "message": account["message"],
+                                      "login_reminder": expired and not account.get("expired_notified")})
+            elif self._notify and account["status"] != "expired":
                 try:
                     self.post_message(mtype=NotificationType.Plugin, title=f"bp PULSE · {account['name']}",
                                       text=account["message"])
@@ -463,6 +554,38 @@ class BpPulseSignin(_PluginBase):
         """手动签到所选账号，与定时开关独立。"""
         return self._reply(lambda: self._check_in(payload.get("id"), manual=True))
 
+    def claim_prizes_api(self, payload: dict = Body(...)):
+        """手动领取所选账号全部已达标且尚未领取的签到奖励，不触发签到。"""
+        def claim():
+            self._check_query_state()
+            generation = self._stop_event
+            with self._account(payload.get("id")) as account:
+                account["last_claim"] = datetime.now(CronTrigger(timezone=settings.TZ).timezone).isoformat(timespec="seconds")
+                logger.info(f"bp PULSE [{account['id'][:8]}]：开始手动领取全部签到奖励")
+                try:
+                    if not account.get("cookie") or account.get("auth_status") == "expired":
+                        raise AuthExpired("请手动登录后再领奖")
+                    result = self._client.claim_prizes(account["cookie"])
+                    account.update(claim_status=result["status"], claim_message=result["message"],
+                                   auth_status="valid", expired_notified=False,
+                                   coupon_error="领奖结果已更新，请刷新优惠券",
+                                   reward_error="领奖结果已更新，请刷新奖励状态")
+                except AuthExpired:
+                    account.update(auth_status="expired" if account.get("cookie") else "missing",
+                                   claim_status="expired", claim_message="登录已失效，请手动登录")
+                    self._notify_expired(account)
+                except BPError as exc:
+                    account.update(claim_status="error", claim_message=str(exc))
+                except Exception as exc:
+                    logger.error(f"bp PULSE 领奖失败：{type(exc).__name__}")
+                    account.update(claim_status="error", claim_message="领奖结果未确认，请先查看优惠券再重试")
+                if generation.is_set():
+                    raise BPError("插件已重载，领奖结果未写入记录，请先刷新优惠券确认")
+                self._store(account)
+                logger.info(f"bp PULSE [{account['id'][:8]}]：手动领奖 {account['claim_status']}")
+                return account["claim_message"]
+        return self._reply(claim)
+
     def run_service(self):
         stop_event = self._stop_event
         if stop_event.is_set() or not self.get_state():
@@ -471,17 +594,21 @@ class BpPulseSignin(_PluginBase):
             logger.info("bp PULSE：已有批量签到正在执行，跳过本次重复运行")
             return
         try:
+            notifications = []
             with self._lock:
-                ids = [a["id"] for a in self._accounts().values() if a.get("enabled")]
-            logger.info(f"bp PULSE：定时签到，共 {len(ids)} 个账号")
-            for account_id in ids:
+                selected = [(a["id"], a["name"]) for a in self._accounts().values() if a.get("enabled")]
+            logger.info(f"bp PULSE：定时签到，共 {len(selected)} 个账号")
+            for account_id, name in selected:
                 if stop_event.is_set() or not self.get_state():
                     break
                 try:
-                    self._check_in(account_id)
+                    self._check_in(account_id, notifications=notifications)
                 except BPError as exc:
                     logger.warning(f"bp PULSE [{account_id[:8]}]：{exc}")
+                    notifications.append({"name": name, "message": str(exc)})
                 except Exception as exc:
                     logger.error(f"bp PULSE [{account_id[:8]}] 签到失败：{type(exc).__name__}")
+                    notifications.append({"name": name, "message": "签到处理失败，请查看插件日志"})
+            self._send_batch_notification(notifications)
         finally:
             self._batch_lock.release()

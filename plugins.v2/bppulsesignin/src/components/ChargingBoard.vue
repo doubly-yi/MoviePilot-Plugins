@@ -24,6 +24,11 @@ async function refreshAccount(a, publish = true) {
   if (busy.value[a.id]) return
   busy.value[a.id] = true
   try {
+    // 同账号依次查询，复用操作互斥锁；失败不妨碍另一类只读查询。
+    try {
+      const rewards = await props.request('rewards/refresh', {id:a.id})
+      if (publish) emit('updated', rewards.data)
+    } catch (e) { emit('notice', {type:'error',text:`${a.name}：${e?.response ? '奖励查询失败，更新插件后请先保存插件设置' : e.message}`}) }
     const response = await props.request('coupons/refresh', {id:a.id})
     if (publish) emit('updated', response.data)
   } catch (e) { emit('notice', {type:'error', text:`${a.name}：${e?.response ? '查询失败，请检查连接' : e.message}`}) }

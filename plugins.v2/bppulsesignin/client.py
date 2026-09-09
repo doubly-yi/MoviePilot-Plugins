@@ -107,7 +107,28 @@ class BPClient:
             raise BPError("登录响应缺少凭据，请重新登录")
         return token.strip()
 
-    def check_in(self, token):
+    def claim_prizes(self, token):
+        prize = self.request("standard/activity/api/signInActivity/receiveAllSignInPrize", {}, token)
+        received = prize.get("receiveFlag") is True
+        return {"status": "success" if received else "processed",
+                "message": "礼包已领取" if received else "暂无可领取礼包"}
+
+    def rewards(self, token):
+        data = self.request("standard/activity/api/signInActivity/signInAndGetInfo",
+                            {"authSignInFlag": False}, token)
+        prizes = data.get("prizeList")
+        if not isinstance(prizes, list) or any(not isinstance(p, dict) for p in prizes):
+            raise BPError("奖励任务列表格式异常，请稍后刷新")
+        def count(value):
+            return value if type(value) is int and value >= 0 else None
+        return [{"name": str(p.get("prizeName") or "未命名奖励")[:200],
+                 "description": str(p.get("signInDesc") or "")[:200],
+                 "progress": count(p.get("signInCount")), "target": count(p.get("signInDays")),
+                 "status": str(p.get("status"))[:40] if p.get("status") is not None else "",
+                 "status_text": str(p.get("statusDesc") or "")[:100]}
+                for p in prizes]
+
+    def check_in(self, token, auto_claim=True):
         data = self.request("standard/activity/api/signInActivity/signInAndGetInfo",
                             {"authSignInFlag": True}, token)
         signed = data.get("signInFlag") is True
@@ -115,9 +136,11 @@ class BPClient:
         count = data.get("totalSignInCount")
         if isinstance(count, (int, float)):
             lines.append(f"本月累计 {count} 天")
+        if not auto_claim:
+            lines.append("自动领奖已关闭")
+            return {"status": "success" if signed else "processed", "message": "；".join(lines)}
         try:
-            prize = self.request("standard/activity/api/signInActivity/receiveAllSignInPrize", {}, token)
-            lines.append("礼包已领取" if prize.get("receiveFlag") else "暂无可领取礼包")
+            lines.append(self.claim_prizes(token)["message"])
         except AuthExpired:
             raise
         except BPError:
