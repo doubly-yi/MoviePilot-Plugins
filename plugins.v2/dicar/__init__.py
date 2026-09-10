@@ -411,9 +411,9 @@ class Dicar(_PluginBase):
             ("sdk", "SDK 版本"), ("mod", "外层设备厂商"),
         ]
         return [{"component": "VForm", "content": [
-            row(field("cron", "执行周期（Cron）", cols=12, hint="五段表达式，按 MoviePilot 时区执行；默认每天 03:30", persistentHint=True)),
             row(field("enabled", "启用定时签到", "VSwitch", 3), field("notify", "发送通知", "VSwitch", 3),
                 field("onlyonce", "立即运行一次", "VSwitch", 3), field("relogin", "重新登录一次", "VSwitch", 3)),
+            row(field("cron", "执行周期（Cron）", cols=12, hint="五段表达式，按 MoviePilot 时区执行；默认每天 03:30", persistentHint=True)),
             row(field("phone", "手机号", autocomplete="off"), field("password", "密码", type="password", autocomplete="new-password",
                 hint="留空保留已保存密码", persistentHint=True)),
             row(field("target_brand", "品牌", "VSelect", cols=12, items=profiles)),
