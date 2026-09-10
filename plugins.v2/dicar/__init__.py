@@ -26,7 +26,7 @@ class Dicar(_PluginBase):
     plugin_name = "Dicar"
     plugin_desc = "签到插件，支持定时签到、积分余额查询和签到日历。"
     plugin_icon = "signin.png"
-    plugin_version = "1.0.0"
+    plugin_version = "1.0.1"
     plugin_author = "doubly-yi"
     author_url = "https://github.com/doubly-yi"
     plugin_config_prefix = "dicar_"

@@ -31,13 +31,14 @@
         "name": "Dicar",
         "description": "签到插件，支持定时签到、积分余额查询和签到日历。",
         "labels": "工具",
-        "version": "1.0.0",
+        "version": "1.0.1",
         "icon": "signin.png",
         "author": "doubly-yi",
         "level": 1,
         "system_version": ">=2.15.6,<3",
         "v3": false,
         "history": {
+            "v1.0.1": "优化签到日历布局与日期状态，统一福利积分配色，适配窄屏和深色主题。",
             "v1.0.0": "支持 Token 复用、定时签到、签到日历、积分余额查询与通知。"
         }
     }
