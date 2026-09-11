@@ -1,4 +1,4 @@
-"""优惠券展示与站点范围匹配；不推断未确认的范围枚举。"""
+"""优惠券展示；站点适用性以官方按站点查询的结果为准。"""
 import math
 from datetime import datetime, timezone, timedelta
 
@@ -26,10 +26,6 @@ def timestamp(value):
 
 
 def normalize_coupon(raw):
-    stations = raw.get("stations")
-    # 不截断适用站点，否则靠后的站点会被误判为不可用。
-    ids = [str(s["stationId"]) for s in stations
-           if isinstance(s, dict) and s.get("stationId")] if isinstance(stations, list) else []
     return {"id": text(raw.get("couponId")), "name": text(raw.get("couponName")),
             "kind": text(raw.get("couponTypeDesc")), "type": str(raw.get("couponType")),
             "status": str(raw.get("couponUseStatus")),
@@ -38,14 +34,16 @@ def normalize_coupon(raw):
             "start": timestamp(raw.get("validStartTime")), "end": timestamp(raw.get("validEndTime")),
             "usage_start": text(raw.get("usageStartTime")), "usage_end": text(raw.get("usageEndTime")),
             "agreement": text(raw.get("couponAgreement"), 4000),
-            "extra_limits": bool(raw.get("vipTypes") or raw.get("weekTypes")),
-            "station_ids": ids, "scope_known": str(raw.get("selectType")) == "2" and bool(ids)}
+            "extra_limits": bool(raw.get("vipTypes") or raw.get("weekTypes"))}
 
 
 def public_coupon(coupon, station_id, now):
-    result = {k: v for k, v in coupon.items() if k not in ("station_ids", "scope_known")}
-    result["scope"] = ("unknown" if not coupon["scope_known"] else
-                       "match" if station_id in coupon["station_ids"] else "other") if station_id else "unselected"
+    result = {k: v for k, v in coupon.items()
+              if k not in ("station_ids", "scope_known", "checked_station_id", "station_match")}
+    # 旧缓存中的站点名单不再参与判断，刷新后由官方查询结果替换。
+    result["scope"] = "unknown" if station_id else "unselected"
+    if station_id and coupon.get("checked_station_id") == station_id:
+        result["scope"] = "match" if coupon.get("station_match") else "other"
     result["validity"] = ("used" if coupon["status"] != "0" else
                           "unknown" if coupon["start"] is None or coupon["end"] is None else
                           "expired" if now > coupon["end"] else

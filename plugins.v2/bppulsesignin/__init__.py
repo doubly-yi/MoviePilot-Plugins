@@ -25,7 +25,7 @@ class BpPulseSignin(_PluginBase):
     plugin_name = "bp PULSE 签到"
     plugin_desc = "多账号签到、短信登录、常用站点优惠券汇总与空闲枪数查询。"
     plugin_icon = "https://raw.githubusercontent.com/doubly-yi/MoviePilot-Plugins/main/icons/BpPulseSignin.ico"
-    plugin_version = "1.0.2"
+    plugin_version = "1.0.3"
     plugin_author = "doubly-yi"
     author_url = "https://github.com/doubly-yi"
     plugin_config_prefix = "bppulsesignin_"
@@ -279,19 +279,33 @@ class BpPulseSignin(_PluginBase):
         return self._reply(refresh)
 
     def coupons_refresh_api(self, payload: dict = Body(...)):
-        """查询指定账号的全部未使用优惠券，不签到、不领取奖励。"""
+        """查询全部未使用券及官方本站适用券，不签到、不领取奖励。"""
         def refresh():
             self._check_query_state()
             generation = self._stop_event
             with self._account(payload.get("id")) as account:
-                if account.get("coupon_updated") and time.time() - account["coupon_updated"] < 60 and not account.get("coupon_error"):
+                station_id = self._station["id"] if self._station else ""
+                scope_stale = account.get("coupon_station_id") != station_id
+                if (account.get("coupon_updated") and time.time() - account["coupon_updated"] < 60
+                        and not account.get("coupon_error") and not scope_stale):
                     return "优惠券已是最近一分钟的结果"
                 try:
                     if not account.get("cookie") or account.get("auth_status") == "expired":
                         raise AuthExpired("请手动登录后再查询优惠券")
                     data = self._client.coupons(account["cookie"])
                     coupons = [normalize_coupon(c) for c in data]
-                    account.update(coupons=coupons, coupon_updated=time.time(), coupon_error="",
+                    if station_id:
+                        # 官方一次返回该站点适用券，不再解析或比对券内站点名单。
+                        applicable = self._client.coupons(account["cookie"], station_id)
+                        matched = {str(c["couponId"]) for c in applicable}
+                        # 两次查询之间可能有新券到账，以本站查询返回的券为准并保留全部券视图。
+                        merged = {c["id"]: c for c in coupons}
+                        merged.update({str(c["couponId"]): normalize_coupon(c) for c in applicable})
+                        coupons = list(merged.values())
+                        for coupon in coupons:
+                            coupon.update(checked_station_id=station_id, station_match=coupon["id"] in matched)
+                    account.update(coupons=coupons, coupon_station_id=station_id,
+                                   coupon_updated=time.time(), coupon_error="",
                                    auth_status="valid", expired_notified=False)
                 except AuthExpired:
                     account.update(auth_status="expired" if account.get("cookie") else "missing",

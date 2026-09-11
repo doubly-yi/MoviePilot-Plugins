@@ -39,11 +39,14 @@ class BPClient:
         return self.request("standard/poi/v1/es/station/details",
                             {"stationId": station_id, "longitude": 0, "latitude": 0}, token)
 
-    def coupons(self, token):
+    def coupons(self, token, station_id=""):
         coupons, seen = [], set()
         for page in range(1, 101):
+            query = {"couponReceiveType": 0, "pageNum": page, "pageSize": 10}
+            if station_id:
+                query["stationId"] = station_id
             data = self.request("standard/activity/api/coupon/list",
-                                {"couponReceiveType": 0, "pageNum": page, "pageSize": 10}, token)
+                                query, token)
             items = data.get("list")
             if not isinstance(items, list) or any(not isinstance(c, dict) for c in items):
                 raise BPError("优惠券列表格式异常，请稍后刷新")

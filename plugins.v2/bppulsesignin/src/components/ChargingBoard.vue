@@ -79,7 +79,7 @@ onMounted(refresh)
           <p>{{ c.kind }}<span v-if="c.minimum"> · 订单满 {{ money(c.minimum) }} 元</span></p>
           <p class="bp-muted">{{ c.name }}</p>
           <p class="bp-muted">有效期：{{ date(c.start) }} — {{ date(c.end) }}（北京时间）</p>
-          <div class="bp-coupon-tags"><VChip v-if="selected" size="x-small" :color="c.scope === 'match' ? 'success' : 'secondary'">{{ {match:'本站适用',other:'其他站点',unknown:'站点范围待确认'}[c.scope] }}</VChip><VChip v-if="validity(c)" size="x-small" color="warning">{{ validity(c) }}</VChip><VChip v-if="limited(c)" size="x-small" color="warning">有额外使用限制</VChip></div>
+          <div class="bp-coupon-tags"><VChip v-if="selected" size="x-small" :color="c.scope === 'match' ? 'success' : 'secondary'">{{ {match:'本站适用',other:'本站不适用',unknown:'站点范围待确认'}[c.scope] }}</VChip><VChip v-if="validity(c)" size="x-small" color="warning">{{ validity(c) }}</VChip><VChip v-if="limited(c)" size="x-small" color="warning">有额外使用限制</VChip></div>
           <details v-if="c.agreement || c.usage_start || c.extra_limits"><summary>使用规则</summary><p v-if="c.usage_start">每日 {{ c.usage_start }} — {{ c.usage_end || '未知' }}</p><p v-if="c.extra_limits">存在会员或星期限制，请在 bp 中确认具体要求。</p><p>{{ c.agreement || '暂无补充规则' }}</p></details>
         </div>
         <p v-if="a.coupon_updated && !visible(a).length && !busy[a.id]" class="bp-coupon-empty">{{ a.coupon_error ? '上次结果中没有匹配的券' : selected && !all ? '暂无本站适用券' : '暂无未使用优惠券' }}</p>
