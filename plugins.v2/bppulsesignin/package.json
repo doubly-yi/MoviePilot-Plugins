@@ -1,5 +1,5 @@
 {
-  "name": "moviepilot-bppulse-signin", "private": true, "version": "1.0.1", "type": "module",
+  "name": "moviepilot-bppulse-signin", "private": true, "version": "1.0.2", "type": "module",
   "scripts": {"build": "vite build", "typecheck": "vue-tsc --noEmit", "preview-ui": "vite --config preview.config.js --host 127.0.0.1"},
   "dependencies": {"vue": "^3.5.13"},
   "devDependencies": {"@originjs/vite-plugin-federation": "^1.4.1", "@vitejs/plugin-vue": "^5.0.4", "vite": "^5.4.11", "typescript": "~5.7.3", "vue-tsc": "^2.2.0", "vuetify": "3.7.3"}

@@ -118,9 +118,11 @@ async function claimPrizes(a) {
     const response = await request('claim-prizes', {id:a.id})
     absorb(response.data)
     const updated = accounts.value.find(item => item.id === a.id)
-    notice.value = {type:['error','expired'].includes(updated?.claim_status) ? 'warning' : 'success', text:`${a.name}：${response.message}`}
+    const resultNotice = {type:['error','expired'].includes(updated?.claim_status) ? 'warning' : 'success', text:`${a.name}：${response.message}`}
+    notice.value = resultNotice
     if (updated?.auth_status === 'valid') await charging.value?.refreshAccount(updated)
-  } catch (e) { notice.value = {type:'error', text:errorText(e)} }
+    return resultNotice
+  } catch (e) { notice.value = {type:'error', text:errorText(e)}; return notice.value }
   finally { busy.value[a.id] = false }
 }
 async function startLogin(a) {
@@ -184,8 +186,8 @@ onMounted(refresh)
           <td><strong>{{ a.name }}</strong><p class="bp-phone">{{ a.phone.slice(0,3) }}****{{ a.phone.slice(-4) }}</p><p v-if="!a.enabled" class="bp-hint">仅手动签到</p><p v-if="a.auto_claim === false" class="bp-hint">自动领奖已关闭</p></td>
           <td><VChip :color="authMeta(a)[1]" size="small" variant="tonal">{{ authMeta(a)[0] }}</VChip></td>
           <td class="bp-date">{{ formatDate(a.last_run) }}</td>
-          <td><span :class="`bp-state-${a.status || 'idle'}`">{{ a.message || '尚未签到' }}</span><p v-if="a.claim_message" class="bp-hint" :class="`bp-state-${a.claim_status}`" :title="formatDate(a.last_claim)">手动领奖：{{ a.claim_message }}</p><div><RewardDetails :account="a" :request="request" @updated="absorb" /></div></td>
-          <td><div class="bp-row-actions"><VBtn size="small" variant="tonal" color="primary" :loading="busy[a.id]" :disabled="!a.has_token || a.auth_status === 'expired'" @click="checkIn(a)">签到</VBtn><VBtn size="small" variant="text" color="primary" :disabled="busy[a.id] || !a.has_token || a.auth_status === 'expired'" @click="claimPrizes(a)">领取全部奖励</VBtn><VBtn size="small" variant="text" color="primary" :disabled="busy[a.id]" @click="startLogin(a)">登录</VBtn></div></td>
+          <td><span :class="`bp-state-${a.status || 'idle'}`">{{ a.message || '尚未签到' }}</span><p v-if="a.claim_message" class="bp-hint" :class="`bp-state-${a.claim_status}`" :title="formatDate(a.last_claim)">手动领奖：{{ a.claim_message }}</p></td>
+          <td><div class="bp-row-actions"><VBtn size="small" variant="tonal" color="primary" :loading="busy[a.id]" :disabled="!a.has_token || a.auth_status === 'expired'" @click="checkIn(a)">签到</VBtn><RewardDetails :account="a" :request="request" :claim="claimPrizes" :busy="!!busy[a.id]" @updated="absorb" /><VBtn size="small" variant="text" color="primary" :disabled="busy[a.id]" @click="startLogin(a)">登录</VBtn></div></td>
         </tr></tbody>
       </VTable>
       <ChargingBoard v-if="loaded && accounts.length" ref="charging" :accounts="accounts" :selected="settings.station" :station="station" :request="request" @updated="absorb" @notice="notice = $event" @settings="emit('switch')" />
@@ -221,7 +223,7 @@ onMounted(refresh)
         <VCheckbox v-if="editor.id" v-model="editor.clear_token" label="清除已保存的登录信息" color="warning" hide-details />
         <VSwitch v-model="editor.enabled" color="primary" label="参与定时签到" hide-details />
         <VSwitch v-model="editor.auto_claim" color="primary" label="签到后自动领取奖励" hide-details />
-        <p class="bp-hint">关闭后，手动和定时签到均不主动领奖；可在看板点击“领取全部奖励”。</p>
+        <p class="bp-hint">关闭后，手动和定时签到均不主动领奖；可在“奖励详情”中点击“领取全部奖励”。</p>
       </VCardText><VCardActions><VSpacer/><VBtn :disabled="editing" @click="editor = null">取消</VBtn><VBtn color="primary" variant="flat" :loading="editing" @click="saveAccount">保存账号</VBtn></VCardActions></VCard>
     </VDialog>
     <VDialog :model-value="!!loginTarget" max-width="480" persistent>
