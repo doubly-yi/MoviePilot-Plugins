@@ -46,6 +46,10 @@ class TaskError(Exception):
     """A safe, user-visible error; never contains a raw response or credentials."""
 
 
+class SessionExpired(TaskError):
+    """The server explicitly rejected the saved session."""
+
+
 class Stopped(TaskError):
     pass
 
@@ -281,10 +285,14 @@ class TaskClient:
                  "brand": self.config["target_brand"], "belong_brand": self.config["target_brand"], **(extra or {})}
         outer, key = self.token_outer(int(time.time() * 1000), session, inner)
         response = self.post_secure(endpoint, outer)
+        # Code 22 was observed when the mobile app invalidated a saved token.
+        # Other business errors must not trigger a login or replay a sign-in.
+        if str(response.get("code")) == "22":
+            raise SessionExpired("登录凭据已失效（代码 22）")
         if str(response.get("code")) not in ("0", "200"):
             code = str(response.get("code", ""))
             safe_code = code if re.fullmatch(r"-?\d{1,10}", code) else "未知"
-            raise TaskError(f"业务接口拒绝请求（代码 {safe_code}），登录凭据可能已失效；本次未重新登录")
+            raise TaskError(f"业务接口拒绝请求（代码 {safe_code}）")
         try:
             data = json.loads(aes_decrypt(response["respondData"], key))
             if not isinstance(data, dict):

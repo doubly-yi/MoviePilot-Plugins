@@ -16,7 +16,7 @@ from app.log import logger
 from app.plugins import _PluginBase
 from app.schemas.types import NotificationType
 
-from .transport import PROFILES, TaskClient, TaskError, DEFAULTS, Stopped, decode_text, notification, validate_config
+from .transport import PROFILES, TaskClient, TaskError, DEFAULTS, SessionExpired, Stopped, decode_text, notification, validate_config
 from .panel import render_calendar
 
 PREVIOUS_ID = decode_text("QnlkU2lnbmlu")
@@ -26,7 +26,7 @@ class Dicar(_PluginBase):
     plugin_name = "Dicar"
     plugin_desc = "签到插件，支持定时签到、积分余额查询和签到日历。"
     plugin_icon = "signin.png"
-    plugin_version = "1.0.1"
+    plugin_version = "1.0.2"
     plugin_author = "doubly-yi"
     author_url = "https://github.com/doubly-yi"
     plugin_config_prefix = "dicar_"
@@ -219,7 +219,17 @@ class Dicar(_PluginBase):
                                log=(lambda message: logger.info("Dicar：" + message)) if config["debug"] else lambda message: None)
             fingerprint = self._fingerprint(client.config)
             session, source = self._session(client, generation, force=config.get("relogin") is True)
-            result = client.run(session)
+            try:
+                result = client.run(session)
+            except SessionExpired:
+                if source != "cached":
+                    raise
+                # Only retry an explicitly rejected cached session, once per run.
+                # Mark the attempt before logging in so failures remain accurate.
+                source = "auto_relogin"
+                logger.info("Dicar：已保存 Token 失效，自动重新登录并重试一次签到")
+                session, _ = self._session(client, generation, force=True)
+                result = client.run(session)
             title, text = notification(result)
         except Stopped:
             return
@@ -242,8 +252,8 @@ class Dicar(_PluginBase):
                 self._save_calendar(result["calendar"], fingerprint)
             self._save_balance(result.get("balance"), fingerprint,
                                "积分余额查询失败" if not result.get("balance") else "")
-            if not result.get("ok") and source == "cached":
-                result["error"] += "。本次使用已保存 Token，未自动重新登录；如确认失效，请手动重新登录一次"
+            if not result.get("ok") and source == "auto_relogin":
+                result["error"] += "。本次已尝试自动重新登录，不再重试；请检查账号配置或稍后重试"
                 text = result["error"]
             result["updated_at"] = datetime.now(pytz.timezone(settings.TZ)).strftime("%Y-%m-%d %H:%M:%S")
             self.save_data("last_result", result)
@@ -260,7 +270,7 @@ class Dicar(_PluginBase):
         return hashlib.sha256(json.dumps(fields, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
     def _session(self, client, generation, force=False, allow_login=True):
-        """Persist before execution so failures never cause another automatic login."""
+        """Persist before execution; callers control the bounded re-login policy."""
         fingerprint = self._fingerprint(client.config)
         with self._lock:
             if generation.is_set():
@@ -280,7 +290,7 @@ class Dicar(_PluginBase):
             return session, "cached"
         if not allow_login:
             raise TaskError("尚无保存的登录凭据，请先在设置中签到一次")
-        logger.info("Dicar：" + ("按手动操作重新登录" if force else "尚无保存的 Token，首次登录"))
+        logger.info("Dicar：" + ("正在重新登录" if force else "尚无保存的 Token，首次登录"))
         session = client.login()
         saved = {"version": 1, "fingerprint": fingerprint,
                  "session": {k: session.get(k, "") for k in ("userId", "superId", "signToken", "encryToken")},
@@ -418,7 +428,7 @@ class Dicar(_PluginBase):
                 hint="留空保留已保存密码", persistentHint=True)),
             row(field("target_brand", "品牌", "VSelect", cols=12, items=profiles)),
             {"component": "VAlert", "props": {"type": "info", "variant": "tonal", "class": "my-3"},
-             "text": "自动复用 Token，失效后需手动重新登录。与手机 App 不能同时在线，重新登录会使另一端掉线。"},
+             "text": "签到时自动复用 Token，确认失效后自动重新登录并重试一次；打开看板不会触发登录。与手机 App 不能同时在线，重新登录会使另一端掉线。"},
             {"component": "VExpansionPanels", "content": [{"component": "VExpansionPanel", "content": [
                 {"component": "VExpansionPanelTitle", "text": "高级请求参数"},
                 {"component": "VExpansionPanelText", "content": [row(
